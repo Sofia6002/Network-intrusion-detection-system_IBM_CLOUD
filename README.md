@@ -57,7 +57,7 @@ NSL-KDD has 41 features across 4 groups. This project reconstructs **28 of 41** 
 | Basic (duration, protocol_type, service, flag, bytes, etc.) | 9 | ✅ Yes |
 | Time-based (count, serror_rate, same_srv_rate, etc.) | 9 | ✅ Yes, via flow aggregator |
 | Host-based (dst_host_count, dst_host_srv_count, etc.) | 10 | ✅ Yes, via flow aggregator |
-| Content (num_failed_logins, root_shell, etc.) | 13 | ❌ No — requires app-layer parsing, out of scope |
+
 
 The 13 Content features are set to safe defaults (0 / not logged in) at inference time.
 
