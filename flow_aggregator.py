@@ -31,7 +31,7 @@ LOG_FILE_PATH = "nids_log.jsonl"
 log_file_lock = threading.Lock()
 
 
-def append_log_entry(canonical_key, prediction, confidence, mitigation):
+def append_log_entry(canonical_key, prediction, confidence, mitigation, attack_type=None, attack_rationale=None):
     """
     Append one classified connection as a JSON line. The Streamlit
     dashboard (a separate process) polls this file -- append-only,
@@ -49,6 +49,8 @@ def append_log_entry(canonical_key, prediction, confidence, mitigation):
         "prediction": prediction if prediction is not None else "unknown",
         "confidence": round(confidence, 4) if confidence is not None else None,
         "mitigation": mitigation,
+        "attack_type": attack_type,          # heuristic-only, see classify_attack_type()
+        "attack_rationale": attack_rationale,
     }
     with log_file_lock:
         with open(LOG_FILE_PATH, "a") as f:
@@ -166,13 +168,129 @@ MITIGATION_TABLE = {
 }
 
 
-def display_alert(canonical_key, prediction, confidence):
+# ============================================================
+# HEURISTIC ATTACK-TYPE SUB-CLASSIFIER
+#
+# IMPORTANT -- read before changing thresholds:
+# This is NOT a trained multi-class model. The dataset explicitly
+# linked in the problem statement (Section 2a) only contains binary
+# normal/anomaly labels -- there is no DoS/Probe/R2L/U2R ground truth
+# to train against. This module is a rule-based heuristic, built from
+# published NSL-KDD feature semantics, that runs ONLY on connections
+# the trained binary model has already flagged as "anomaly". It gives
+# an educated guess at *which kind* of anomaly the pattern resembles,
+# for operator context -- it does not replace or override the binary
+# model's decision, and it should be reported as a heuristic overlay,
+# not as a second ML classifier.
+#
+# R2L/U2R signatures in real NSL-KDD depend heavily on the 13 Content
+# features (num_failed_logins, root_shell, etc.), which this project
+# defaults to 0 at inference time (Section 2b) because they require
+# application-layer parsing not available from raw packets. So this
+# heuristic can only ever weakly suspect R2L/U2R, never confirm it --
+# that limitation is intentional and should be stated as such.
+# ============================================================
+
+ATTACK_TYPE_MITIGATION = {
+    "Probe": (
+        "Pattern resembles reconnaissance/scanning (many connection attempts, "
+        "high service diversity, SYN-only or rejected connections). Recommend "
+        "rate-limiting or temporarily blocking the source IP and reviewing "
+        "firewall logs for repeated attempts from the same source."
+    ),
+    "DoS": (
+        "Pattern resembles a denial-of-service flood (high volume of connections "
+        "to the same host/service, elevated error rate). Recommend immediate "
+        "rate-limiting or blocking of the source and prioritized operator review."
+    ),
+    "R2L/U2R (unconfirmed)": (
+        "Pattern is weakly consistent with an unauthorized-access attempt, but "
+        "this cannot be confirmed from live traffic alone -- the login/session "
+        "detail features this would normally rely on are not available outside "
+        "a full NSL-KDD record. Recommend manual log review on the target host."
+    ),
+    "Unclassified": (
+        "Flagged as anomalous, but the connection's pattern does not clearly "
+        "match a known Probe/DoS/R2L/U2R signature. Recommend standard manual "
+        "triage per Section 6."
+    ),
+}
+
+
+def classify_attack_type(record):
+    """
+    Heuristic-only sub-classification of an already-flagged anomaly.
+    Returns (label, rationale). Scoring is a simple additive heuristic,
+    not a trained model -- thresholds are based on published NSL-KDD
+    feature semantics, not fitted to data.
+    """
+    scores = {"Probe": 0, "DoS": 0, "R2L/U2R (unconfirmed)": 0}
+    reasons = {"Probe": [], "DoS": [], "R2L/U2R (unconfirmed)": []}
+
+    count = record["count"]
+    dst_host_count = record["dst_host_count"]
+    serror_rate = record["serror_rate"]
+    rerror_rate = record["rerror_rate"]
+    same_srv_rate = record["same_srv_rate"]
+    diff_srv_rate = record["diff_srv_rate"]
+    dst_host_same_srv_rate = record["dst_host_same_srv_rate"]
+    dst_host_diff_srv_rate = record["dst_host_diff_srv_rate"]
+    duration = record["duration"]
+    flag = record["flag"]
+    service = record["service"]
+
+    # --- Probe / scan indicators: many short-lived, varied-service or
+    #     unanswered connections in a short window ---
+    if flag in ("S0", "REJ"):
+        scores["Probe"] += 2
+        reasons["Probe"].append(f"flag={flag} (unanswered/rejected connection)")
+    if diff_srv_rate >= 0.5 or dst_host_diff_srv_rate >= 0.5:
+        scores["Probe"] += 2
+        reasons["Probe"].append("high service diversity to same host (diff_srv_rate)")
+    if count >= 5 or dst_host_count >= 10:
+        scores["Probe"] += 1
+        reasons["Probe"].append("elevated connection count in observation window")
+    if duration < 0.1:
+        scores["Probe"] += 1
+        reasons["Probe"].append("very short connection duration")
+
+    # --- DoS indicators: high-volume, same-service flood, elevated errors ---
+    if same_srv_rate >= 0.9 and count >= 10:
+        scores["DoS"] += 3
+        reasons["DoS"].append("high same_srv_rate with high connection count (flood-like)")
+    if serror_rate >= 0.5 or rerror_rate >= 0.5:
+        scores["DoS"] += 2
+        reasons["DoS"].append("elevated error rate (serror_rate/rerror_rate)")
+    if dst_host_count >= 50 and dst_host_same_srv_rate >= 0.9:
+        scores["DoS"] += 2
+        reasons["DoS"].append("high dst_host_count concentrated on one service")
+
+    # --- R2L/U2R indicators: intentionally weak, Content features unavailable ---
+    if service in ("ftp", "telnet", "ssh", "pop_3", "imap4") and flag == "SF" and duration > 2:
+        scores["R2L/U2R (unconfirmed)"] += 1
+        reasons["R2L/U2R (unconfirmed)"].append(
+            f"long authenticated-looking session on {service} "
+            "(weak signal -- login/content details unavailable live)"
+        )
+
+    best_label = max(scores, key=scores.get)
+    best_score = scores[best_label]
+
+    if best_score < 2:
+        return "Unclassified", "No feature pattern scored strongly enough to suggest a specific attack type."
+
+    rationale = "; ".join(reasons[best_label])
+    return best_label, rationale
+
+
+def display_alert(canonical_key, prediction, confidence, attack_type=None, attack_rationale=None):
     src_ip, dst_ip, src_port, dst_port, proto = canonical_key
-    mitigation = MITIGATION_TABLE.get(prediction, "Unknown classification -- manual review recommended.")
 
     if prediction == "anomaly":
+        mitigation = ATTACK_TYPE_MITIGATION.get(attack_type, MITIGATION_TABLE["anomaly"])
         print(f"\n  🚨 ALERT: {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({proto})")
         print(f"     Prediction: ANOMALY  (confidence: {confidence:.1%})")
+        print(f"     Heuristic type guess: {attack_type}  ({attack_rationale})")
         print(f"     Mitigation: {mitigation}")
     else:
         print(f"  ✓ {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({proto})  "
@@ -467,13 +585,20 @@ def emit_feature_vector(conn, canonical_key):
 
     # Phase 3: send to the live WML endpoint for real-time classification
     prediction, confidence = score_vector(FIELD_ORDER, values_row)
-    mitigation = MITIGATION_TABLE.get(prediction, "No prediction available -- scoring call failed.")
-    if prediction is not None:
+
+    attack_type, attack_rationale = None, None
+    if prediction == "anomaly":
+        attack_type, attack_rationale = classify_attack_type(record)
+        mitigation = ATTACK_TYPE_MITIGATION.get(attack_type, MITIGATION_TABLE["anomaly"])
+        display_alert(canonical_key, prediction, confidence, attack_type, attack_rationale)
+    elif prediction is not None:
+        mitigation = MITIGATION_TABLE.get(prediction, "No prediction available -- scoring call failed.")
         display_alert(canonical_key, prediction, confidence)
     else:
+        mitigation = "No prediction available -- scoring call failed."
         print("  [no prediction -- scoring call failed, see error above]")
 
-    append_log_entry(canonical_key, prediction, confidence, mitigation)
+    append_log_entry(canonical_key, prediction, confidence, mitigation, attack_type, attack_rationale)
 
     return {"fields": FIELD_ORDER, "values": [values_row]}
 
