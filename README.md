@@ -72,8 +72,8 @@ The 13 Content features are set to safe defaults (0 / not logged in) at inferenc
 
 **Install**
 ```bash
-git clone <your-repo-url>
-cd <repo-name>
+git clone https://github.com/Sofia6002/Network-intrusion-detection-system_IBM_CLOUD.git
+cd Network-intrusion-detection-system
 python -m venv venv
 venv\Scripts\activate        # Windows
 pip install -r requirements.txt
