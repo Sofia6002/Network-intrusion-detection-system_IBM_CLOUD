@@ -81,11 +81,18 @@ recent_anomalies = df[df["prediction"] == "anomaly"].tail(1)
 
 if not recent_anomalies.empty:
     latest = recent_anomalies.iloc[-1]
+    attack_type = latest.get("attack_type") or "Unclassified"
+    attack_rationale = latest.get("attack_rationale") or "n/a"
     st.error(
         f"**Latest Alert** — {latest['src_ip']}:{latest['src_port']} → "
         f"{latest['dst_ip']}:{latest['dst_port']} ({latest['protocol']})  "
         f"| Confidence: {latest['confidence']:.1%}\n\n"
-        f"**Mitigation:** {latest['mitigation']}"
+        f"**Heuristic type guess:** {attack_type}  \n"
+        f"*({attack_rationale})*\n\n"
+        f"**Mitigation:** {latest['mitigation']}\n\n"
+        f"*Note: the type guess above is a rule-based heuristic applied only to "
+        f"connections the trained model already flagged as anomalous -- it is not "
+        f"itself a trained classifier. See README for details.*"
     )
 else:
     st.success("No anomalies detected yet.")
@@ -96,7 +103,7 @@ st.divider()
 st.subheader("Live Connection Feed")
 
 display_df = df[["time", "src_ip", "src_port", "dst_ip", "dst_port",
-                  "protocol", "prediction", "confidence"]].tail(50).iloc[::-1]
+                  "protocol", "prediction", "confidence", "attack_type"]].tail(50).iloc[::-1]
 
 
 def highlight_anomaly(row):
