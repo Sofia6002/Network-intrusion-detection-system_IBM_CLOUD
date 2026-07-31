@@ -1,5 +1,7 @@
 # Network Intrusion Detection System (NIDS)
 
+-Capstobe project for internship "IBM SkillsBuild - AICTE Internship ; Delivered by EDUNET Foundation: Batch June 2026   
+
 Binary ML-based Network Intrusion Detection System (Normal/Anomaly) built on NSL-KDD. Uses IBM Watson Studio AutoAI for model training, Watson Machine Learning for live REST scoring, a custom Scapy-based flow aggregator to reconstruct features from real traffic, and a Streamlit dashboard for live alerts and mitigation guidance.
 
 ## Overview
