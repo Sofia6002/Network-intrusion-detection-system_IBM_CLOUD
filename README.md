@@ -8,11 +8,9 @@ Binary ML-based Network Intrusion Detection System (Normal/Anomaly) built on NSL
 
 A Network Intrusion Detection System (NIDS) analyzes network traffic to identify malicious activity. This project builds an ML-based NIDS that classifies live-captured network connections as **Normal** or **Anomaly** in real time, using IBM Cloud Lite services end-to-end as required by the assignment (Problem Statement No. 40).
 
-## ⚠️ Important: Scoping Decision 
+## Scope
 
-The original problem statement describes classifying traffic into DoS, Probe, R2L, and U2R attack categories, but links to the Kaggle dataset `sampadab17/network-intrusion-detection`. That dataset's `class` column contains **only `normal`/`anomaly` labels** — the original per-attack-type labels were already collapsed to binary before this CSV was published, so a 4-category classifier cannot be produced from it.
-
-**Decision:** this project follows the dataset as explicitly linked and implements **binary anomaly detection** (Normal vs. Anomaly). This is a deliberate, documented scoping decision — not an oversight — made because the explicitly linked dataset takes precedence over the prose description when the two conflict.
+This project follows the dataset as explicitly linked and implements **binary anomaly detection** (Normal vs. Anomaly). This is a deliberate, documented scoping decision — not an oversight — made because the explicitly linked dataset takes precedence over the prose description when the two conflict.
 
 ## Architecture
 NIC (Wi-Fi/Ethernet)
